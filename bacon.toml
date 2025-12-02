@@ -8,101 +8,80 @@
 default_job = "check"
 
 [jobs.check]
-command = ["cargo", "check", "--all-features", "--color", "always"]
+command = ["cargo", "xtask", "check"]
 need_stdout = false
 
 [jobs.check-all]
-command = ["cargo", "check", "--all-targets", "--all-features", "--color", "always"]
+command = ["cargo", "xtask", "check", "--all-features"]
 need_stdout = false
 
 [jobs.check-crossterm]
-command = ["cargo", "check", "--color", "always", "--all-targets", "--no-default-features", "--features", "crossterm"]
+command = ["cargo", "xtask", "check-backend", "crossterm"]
 need_stdout = false
 
 [jobs.check-termion]
-command = ["cargo", "check", "--color", "always", "--all-targets", "--no-default-features", "--features", "termion"]
+command = ["cargo", "xtask", "check-backend", "termion"]
 need_stdout = false
 
 [jobs.check-termwiz]
-command = ["cargo", "check", "--color", "always", "--all-targets", "--no-default-features", "--features", "termwiz"]
+command = ["cargo", "xtask", "check-backend", "termwiz"]
 need_stdout = false
 
-[jobs.clippy]
-command = [
-    "cargo", "clippy",
-    "--all-targets",
-    "--color", "always",
-]
+[jobs.clippy-all]
+command = ["cargo", "xtask", "clippy"]
 need_stdout = false
 
 [jobs.test]
-command = [
-    "cargo", "test",
-    "--all-features",
-    "--color", "always",
-    "--", "--color", "always", # see https://github.com/Canop/bacon/issues/124
-]
+command = ["cargo", "xtask", "test"]
 need_stdout = true
 
 [jobs.test-unit]
-command = [
-    "cargo", "test",
-    "--lib",
-    "--all-features",
-    "--color", "always",
-    "--", "--color", "always", # see https://github.com/Canop/bacon/issues/124
-]
+command = ["cargo", "xtask", "test-libs"]
 need_stdout = true
 
 [jobs.doc]
-command = [
-    "cargo", "+nightly", "doc",
-    "-Zunstable-options", "-Zrustdoc-scrape-examples",
-    "--all-features",
-    "--color", "always",
-    "--no-deps",
-]
-env.RUSTDOCFLAGS = "--cfg docsrs"
+command = ["cargo", "xtask", "docs"]
 need_stdout = false
 
-# If the doc compiles, then it opens in your browser and bacon switches
-# to the previous job
 [jobs.doc-open]
-command = [
-    "cargo", "+nightly", "doc",
-    "-Zunstable-options", "-Zrustdoc-scrape-examples",
-    "--all-features",
-    "--color", "always",
-    "--no-deps",
-    "--open",
-]
-env.RUSTDOCFLAGS = "--cfg docsrs"
+command = ["cargo", "xtask", "docs", "--open"]
+on_success = "job:doc"
 need_stdout = false
-on_success = "job:doc" # so that we don't open the browser at each change
 
 [jobs.coverage]
-command = [
-    "cargo", "llvm-cov",
-    "--lcov", "--output-path", "target/lcov.info",
-    "--all-features",
-    "--color", "always",
-]
+command = ["cargo", "xtask", "coverage"]
 
 [jobs.coverage-unit-tests-only]
-command = [
-    "cargo", "llvm-cov",
-    "--lcov", "--output-path", "target/lcov.info",
-    "--lib",
-    "--all-features",
-    "--color", "always",
-]
+command = ["cargo", "xtask", "coverage", "--lib"]
+
+[jobs.hack]
+command = ["cargo", "xtask", "hack"]
+
+[jobs.format]
+command = ["cargo", "xtask", "format"]
+
+[jobs.zizmor-offline]
+# zizmor checks the workflow files for security issues. The offline version is generally faster, but
+# checks for fewer issues.
+command = ["zizmor", "--color", "always", ".github/workflows", "--offline"]
+need_stdout = true
+default_watch = false
+watch = [".github/workflows/"]
+
+[jobs.zizmor-online]
+# zizmor checks the workflow files for security issues. The online version is a bit slower, but it
+# checks for more issues
+command = ["zizmor", "--color", "always", ".github/workflows"]
+need_stdout = true
+default_watch = false
+watch = [".github/workflows/"]
 
 # You may define here keybindings that would be specific to
 # a project, for example a shortcut to launch a specific job.
 # Shortcuts to internal functions (scrolling, toggling, etc.)
 # should go in your personal global prefs.toml file instead.
 [keybindings]
-# alt-m = "job:my-job"
+ctrl-h = "job:hack"
 ctrl-c = "job:check-crossterm"
 ctrl-t = "job:check-termion"
 ctrl-w = "job:check-termwiz"
@@ -110,3 +89,6 @@ v = "job:coverage"
 ctrl-v = "job:coverage-unit-tests-only"
 u = "job:test-unit"
 n = "job:nextest"
+f = "job:format"
+z = "job:zizmor-offline"
+shift-z = "job:zizmor-online"

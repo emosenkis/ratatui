@@ -7,7 +7,7 @@
 # - git: https://git-scm.com/
 # - vhs: https://github.com/charmbracelet/vhs - currently this needs to be installed from the
 #   main branch, as the latest release doesn't support the theme we use or the Screenshot
-#   command. Install using `go install github.com/charmbracelet/vhs@main``
+#   command. Install using `go install github.com/charmbracelet/vhs@main`
 # - go: https://golang.org/doc/install
 # - ttyd: https://github.com/tsl0922/ttyd
 
@@ -23,15 +23,18 @@ set -o pipefail
 # set -o xtrace
 
 # ensure that running each example doesn't have to wait for the build
-cargo build --examples --features=crossterm,all-widgets
+for app in *; do
+    cargo build -p "$app"
+done
 
 for tape_path in examples/vhs/*.tape; do
     tape_file=${tape_path/examples\/vhs\//} # strip the examples/vhs/ prefix
     gif_file=${tape_file/.tape/.gif}        # replace the .tape suffix with .gif
-    ~/go/bin/vhs $tape_path --quiet
+    ~/go/bin/vhs "$tape_path" --quiet
     # this can be pasted into the examples README.md
     echo "[${gif_file}]: https://github.com/ratatui/ratatui/blob/images/examples/${gif_file}?raw=true"
 done
+
 git switch images
 git pull --rebase upstream images
 cp target/*.gif examples/

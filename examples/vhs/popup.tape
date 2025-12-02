@@ -1,11 +1,11 @@
 # This is a vhs script. See https://github.com/charmbracelet/vhs for more info.
-# To run this script, install vhs and run `vhs ./examples/popup.tape`
+# To run this script, install vhs and run `vhs ./examples/vhs/popup.tape`
 Output "target/popup.gif"
 Set Theme "Aardvark Blue"
 Set Width 1200
 Set Height 600
 Hide
-Type "cargo run --example=popup --features=crossterm"
+Type "cargo run -p popup"
 Enter
 Sleep 1s
 Show

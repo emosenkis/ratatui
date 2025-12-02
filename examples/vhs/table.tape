@@ -1,11 +1,11 @@
 # This is a vhs script. See https://github.com/charmbracelet/vhs for more info.
-# To run this script, install vhs and run `vhs ./examples/table.tape`
+# To run this script, install vhs and run `vhs ./examples/vhs/table.tape`
 Output "target/table.gif"
 Set Theme "Aardvark Blue"
 Set Width 1400
 Set Height 768
 Hide
-Type "cargo run --example=table --features=crossterm"
+Type "cargo run -p table"
 Enter
 Sleep 1s
 Show

@@ -1,5 +1,5 @@
 # This is a vhs script. See https://github.com/charmbracelet/vhs for more info.
-# To run this script, install vhs and run `vhs ./examples/demo2-social.tape`
+# To run this script, install vhs and run `vhs ./examples/vhs/demo2-social.tape`
 
 Output "target/demo2-social.gif"
 Set Theme "Aardvark Blue"
@@ -9,7 +9,7 @@ Set Width 1280
 Set Height 640
 Set Padding 80
 Hide
-Type "cargo run --example demo2 --features crossterm,widget-calendar"
+Type "cargo run -p demo2"
 Enter
 Sleep 2s
 Show
