@@ -482,3 +482,58 @@ fn terminal_insert_before_large_viewport_does_not_clobber() -> Result<(), Box<dy
 
     Ok(())
 }
+
+#[test]
+#[cfg(feature = "scrolling-regions")]
+fn terminal_insert_before_near_full_viewport_no_corruption() -> Result<(), Box<dyn Error>> {
+    // Regression test for bug where viewport height = screen_height - 1 caused corruption.
+    // When the viewport is one row short of full-screen, insert_before should not leave
+    // content outside the viewport that causes corruption on subsequent draws.
+
+    let backend = TestBackend::new(20, 24);
+    let mut terminal = Terminal::with_options(
+        backend,
+        TerminalOptions {
+            viewport: Viewport::Inline(23), // screen height - 1
+        },
+    )?;
+
+    // Draw initial viewport content
+    terminal.draw(|f| {
+        let paragraph = Paragraph::new("[-- Initial View --]");
+        f.render_widget(paragraph, f.area());
+    })?;
+
+    // Insert lines before viewport (simulating scrolling terminal output)
+    for i in 1..=5 {
+        terminal.insert_before(1, |buf| {
+            Paragraph::new(vec![format!("--- Inserted {:02} ---", i).into()]).render(buf.area, buf);
+        })?;
+    }
+
+    // Redraw viewport - this should not show corruption from previous inserts
+    terminal.draw(|f| {
+        let paragraph = Paragraph::new("[--- Final View ---]");
+        f.render_widget(paragraph, f.area());
+    })?;
+
+    // The viewport should show the final content cleanly, with inserted lines in scrollback
+    // Row 0 (the only visible row at the top) should show the final viewport content,
+    // not leftover content from insert_before operations
+    let buffer_lines: Vec<String> = (0..24)
+        .map(|y| {
+            (0..20)
+                .map(|x| terminal.backend().buffer().cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+        })
+        .collect();
+
+    // The first line of the viewport should contain the final drawn content
+    assert!(
+        buffer_lines[0].contains("[--- Final View ---]"),
+        "First line should show final viewport content, not insert_before leftovers. Got: {}",
+        buffer_lines[0]
+    );
+
+    Ok(())
+}
