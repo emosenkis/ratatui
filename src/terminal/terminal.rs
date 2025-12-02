@@ -710,8 +710,11 @@ where
         draw_fn(&mut buffer);
         let mut buffer = buffer.content.as_slice();
 
-        // Handle the special case where the viewport takes up the whole screen.
-        if self.viewport_area.height == self.last_known_area.height {
+        // Handle the special case where the viewport takes up the whole screen or is one row short.
+        // When the viewport is one row short of the screen, the viewport expansion logic below
+        // would move the viewport down, leaving row 0 outside the viewport but visible on screen.
+        // This causes corruption. Treating it like the full-screen case avoids this issue.
+        if self.viewport_area.height >= self.last_known_area.height.saturating_sub(1) {
             // "Borrow" the top line of the viewport. Draw over it, then immediately scroll it into
             // scrollback. Do this repeatedly until the whole buffer has been put into scrollback.
             let mut first = true;
