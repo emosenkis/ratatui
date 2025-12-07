@@ -175,6 +175,8 @@ where
             viewport_area: self.viewport_area,
             buffer: self.current_buffer_mut(),
             count,
+            #[cfg(feature = "scrolling-regions")]
+            scroll_up: 0,
         }
     }
 
@@ -202,6 +204,83 @@ where
         if let Some((col, row, _)) = updates.last() {
             self.last_known_cursor_pos = Position { x: *col, y: *row };
         }
+        self.backend.draw(updates.into_iter())
+    }
+
+    /// Flushes the current buffer to the terminal with native scrolling support.
+    ///
+    /// This method first scrolls the terminal by the specified number of lines using native
+    /// terminal scrolling (which pushes the top lines into the terminal's scrollback buffer),
+    /// then computes and draws only the cells that differ from what the terminal now displays.
+    ///
+    /// This is more efficient than redrawing everything and enables applications to work with
+    /// the terminal's native scrollback buffer for continuous output like logs.
+    #[cfg(feature = "scrolling-regions")]
+    pub fn flush_with_scroll(&mut self, scroll_lines: u16) -> Result<(), B::Error> {
+        let height = self.viewport_area.height;
+        let width = self.viewport_area.width;
+
+        // Clamp scroll_lines to the viewport height
+        let scroll_lines = scroll_lines.min(height);
+
+        if scroll_lines == 0 {
+            return self.flush();
+        }
+
+        // First, perform the native scroll on the terminal.
+        // This pushes the top `scroll_lines` rows into the terminal's scrollback buffer.
+        self.backend.scroll_region_up(0..height, scroll_lines)?;
+
+        // After scrolling, the terminal display is:
+        // - Row 0 now contains what was row `scroll_lines`
+        // - Row 1 now contains what was row `scroll_lines + 1`
+        // - ...
+        // - Row `height - scroll_lines - 1` now contains what was row `height - 1`
+        // - Rows `height - scroll_lines` to `height - 1` are now empty (cleared by scroll)
+        //
+        // To compute the correct diff, we need to compare the current buffer against
+        // what the terminal now shows (the "post-scroll" state of the previous buffer).
+
+        let previous_buffer = &self.buffers[1 - self.current];
+        let current_buffer = &self.buffers[self.current];
+
+        let mut updates: alloc::vec::Vec<(u16, u16, &Cell)> = alloc::vec::Vec::new();
+
+        // For cells in the scrolled region (rows 0 to height - scroll_lines - 1),
+        // compare against the shifted previous buffer
+        for row in 0..(height.saturating_sub(scroll_lines)) {
+            let prev_row = row + scroll_lines;
+            for col in 0..width {
+                let current_idx = (row as usize) * (width as usize) + (col as usize);
+                let prev_idx = (prev_row as usize) * (width as usize) + (col as usize);
+
+                let current_cell = &current_buffer.content[current_idx];
+                let prev_cell = &previous_buffer.content[prev_idx];
+
+                if !current_cell.skip && current_cell != prev_cell {
+                    updates.push((col, row, current_cell));
+                }
+            }
+        }
+
+        // For cells in the newly cleared region (rows height - scroll_lines to height - 1),
+        // compare against an empty cell
+        let empty_cell = Cell::EMPTY;
+        for row in (height.saturating_sub(scroll_lines))..height {
+            for col in 0..width {
+                let current_idx = (row as usize) * (width as usize) + (col as usize);
+                let current_cell = &current_buffer.content[current_idx];
+
+                if !current_cell.skip && current_cell != &empty_cell {
+                    updates.push((col, row, current_cell));
+                }
+            }
+        }
+
+        if let Some((col, row, _)) = updates.last() {
+            self.last_known_cursor_pos = Position { x: *col, y: *row };
+        }
+
         self.backend.draw(updates.into_iter())
     }
 
@@ -394,7 +473,18 @@ where
         // Buffer. Thus, we're taking the important data out of the Frame and dropping it.
         let cursor_position = frame.cursor_position;
 
-        // Draw to stdout
+        // Extract scroll hint if scrolling-regions feature is enabled
+        #[cfg(feature = "scrolling-regions")]
+        let scroll_up = frame.scroll_up;
+
+        // Draw to stdout, using native scrolling if scroll hint was set
+        #[cfg(feature = "scrolling-regions")]
+        if scroll_up > 0 {
+            self.flush_with_scroll(scroll_up)?;
+        } else {
+            self.flush()?;
+        }
+        #[cfg(not(feature = "scrolling-regions"))]
         self.flush()?;
 
         match cursor_position {
@@ -854,4 +944,214 @@ fn compute_inline_size<B: Backend>(
         },
         pos,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::string::ToString;
+
+    use super::*;
+    use crate::backend::TestBackend;
+    use crate::buffer::Buffer;
+    use crate::widgets::Widget;
+
+    /// A simple widget that fills the area with a single character
+    struct FillWidget(char);
+
+    impl Widget for FillWidget {
+        fn render(self, area: Rect, buf: &mut Buffer) {
+            for y in area.top()..area.bottom() {
+                for x in area.left()..area.right() {
+                    buf[(x, y)].set_symbol(&self.0.to_string());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn basic_draw() {
+        let backend = TestBackend::new(5, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                frame.render_widget(FillWidget('a'), frame.area());
+            })
+            .unwrap();
+
+        terminal.backend().assert_buffer_lines(["aaaaa", "aaaaa", "aaaaa"]);
+    }
+
+    #[cfg(feature = "scrolling-regions")]
+    mod scroll_up_tests {
+        use alloc::string::ToString;
+
+        use super::*;
+
+        /// A widget that fills each row with a different character (a, b, c, ...)
+        struct RowFillWidget;
+
+        impl Widget for RowFillWidget {
+            fn render(self, area: Rect, buf: &mut Buffer) {
+                for y in area.top()..area.bottom() {
+                    let ch = (b'a' + (y - area.top()) as u8) as char;
+                    for x in area.left()..area.right() {
+                        buf[(x, y)].set_symbol(&ch.to_string());
+                    }
+                }
+            }
+        }
+
+        #[test]
+        fn set_scroll_up_basic() {
+            let backend = TestBackend::new(5, 4);
+            let mut terminal = Terminal::new(backend).unwrap();
+
+            // First draw: fill with a, b, c, d
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(RowFillWidget, frame.area());
+                })
+                .unwrap();
+
+            terminal.backend().assert_buffer_lines(["aaaaa", "bbbbb", "ccccc", "ddddd"]);
+            terminal.backend().assert_scrollback_empty();
+
+            // Second draw: scroll up by 2 lines and fill with e, f, g, h
+            terminal
+                .draw(|frame| {
+                    frame.set_scroll_up(2);
+                    // Fill with e, f, g, h (starting from 'e' = 'a' + 4)
+                    for y in 0..4 {
+                        let ch = (b'e' + y as u8) as char;
+                        for x in 0..5 {
+                            frame.buffer_mut()[(x, y)].set_symbol(&ch.to_string());
+                        }
+                    }
+                })
+                .unwrap();
+
+            // After scrolling up by 2:
+            // - Old rows 0, 1 (aaaaa, bbbbb) should be in scrollback
+            // - Screen should show e, f, g, h
+            terminal.backend().assert_buffer_lines(["eeeee", "fffff", "ggggg", "hhhhh"]);
+            terminal
+                .backend()
+                .assert_scrollback_lines(["aaaaa", "bbbbb"]);
+        }
+
+        #[test]
+        fn set_scroll_up_full_screen() {
+            let backend = TestBackend::new(4, 3);
+            let mut terminal = Terminal::new(backend).unwrap();
+
+            // First draw
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(RowFillWidget, frame.area());
+                })
+                .unwrap();
+
+            terminal.backend().assert_buffer_lines(["aaaa", "bbbb", "cccc"]);
+
+            // Scroll entire screen
+            terminal
+                .draw(|frame| {
+                    frame.set_scroll_up(3);
+                    frame.render_widget(FillWidget('x'), frame.area());
+                })
+                .unwrap();
+
+            terminal.backend().assert_buffer_lines(["xxxx", "xxxx", "xxxx"]);
+            terminal
+                .backend()
+                .assert_scrollback_lines(["aaaa", "bbbb", "cccc"]);
+        }
+
+        #[test]
+        fn set_scroll_up_partial_change() {
+            let backend = TestBackend::new(5, 3);
+            let mut terminal = Terminal::new(backend).unwrap();
+
+            // First draw: abc
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(RowFillWidget, frame.area());
+                })
+                .unwrap();
+
+            terminal.backend().assert_buffer_lines(["aaaaa", "bbbbb", "ccccc"]);
+
+            // Second draw: scroll up by 1, but keep some content the same
+            // After scroll: terminal shows [b, c, empty]
+            // We want final result: [b, c, d]
+            terminal
+                .draw(|frame| {
+                    frame.set_scroll_up(1);
+                    // Render b, c, d (which matches shifted content for first 2 rows)
+                    for y in 0..3 {
+                        let ch = (b'b' + y as u8) as char;
+                        for x in 0..5 {
+                            frame.buffer_mut()[(x, y)].set_symbol(&ch.to_string());
+                        }
+                    }
+                })
+                .unwrap();
+
+            // Row 0 should be 'b' (matches post-scroll row 0, so no draw needed)
+            // Row 1 should be 'c' (matches post-scroll row 1, so no draw needed)
+            // Row 2 should be 'd' (new content)
+            terminal.backend().assert_buffer_lines(["bbbbb", "ccccc", "ddddd"]);
+            terminal.backend().assert_scrollback_lines(["aaaaa"]);
+        }
+
+        #[test]
+        fn set_scroll_up_zero_is_noop() {
+            let backend = TestBackend::new(4, 2);
+            let mut terminal = Terminal::new(backend).unwrap();
+
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(RowFillWidget, frame.area());
+                })
+                .unwrap();
+
+            // Scroll by 0 should have no effect
+            terminal
+                .draw(|frame| {
+                    frame.set_scroll_up(0);
+                    frame.render_widget(FillWidget('x'), frame.area());
+                })
+                .unwrap();
+
+            terminal.backend().assert_buffer_lines(["xxxx", "xxxx"]);
+            terminal.backend().assert_scrollback_empty();
+        }
+
+        #[test]
+        fn set_scroll_up_clamped_to_height() {
+            let backend = TestBackend::new(4, 3);
+            let mut terminal = Terminal::new(backend).unwrap();
+
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(RowFillWidget, frame.area());
+                })
+                .unwrap();
+
+            // Scroll by more than height should be clamped
+            terminal
+                .draw(|frame| {
+                    frame.set_scroll_up(100); // Way more than height of 3
+                    frame.render_widget(FillWidget('x'), frame.area());
+                })
+                .unwrap();
+
+            terminal.backend().assert_buffer_lines(["xxxx", "xxxx", "xxxx"]);
+            // All 3 lines should be in scrollback
+            terminal
+                .backend()
+                .assert_scrollback_lines(["aaaa", "bbbb", "cccc"]);
+        }
+    }
 }

@@ -31,6 +31,16 @@ pub struct Frame<'a> {
 
     /// The frame count indicating the sequence number of this frame.
     pub(crate) count: usize,
+
+    /// Number of lines to scroll up (content moves up, top lines go to scrollback).
+    ///
+    /// When set, the terminal will use native scrolling to push the top N lines into the
+    /// terminal's scrollback buffer before rendering. This is useful for applications like
+    /// log viewers where content continuously scrolls.
+    ///
+    /// This field is only available when the `scrolling-regions` feature is enabled.
+    #[cfg(feature = "scrolling-regions")]
+    pub(crate) scroll_up: u16,
 }
 
 /// `CompletedFrame` represents the state of the terminal after all changes performed in the last
@@ -253,5 +263,39 @@ impl Frame<'_> {
     /// ```
     pub const fn count(&self) -> usize {
         self.count
+    }
+
+    /// Sets the number of lines to scroll up before rendering this frame.
+    ///
+    /// When this is set, the terminal will use native terminal scrolling to push the top N lines
+    /// into the terminal's scrollback buffer before rendering the new frame content. This is
+    /// useful for applications like log viewers where content continuously scrolls upward.
+    ///
+    /// The scroll happens before the frame is rendered, so:
+    /// - The top `lines` rows from the previous frame are pushed into scrollback
+    /// - The remaining rows shift up
+    /// - New content is rendered into the bottom of the screen
+    ///
+    /// This enables users to scroll back through the terminal's native scrollback to see
+    /// historical content that has scrolled off the top of the screen.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// # use ratatui::{backend::TestBackend, Terminal};
+    /// # let backend = TestBackend::new(80, 25);
+    /// # let mut terminal = Terminal::new(backend).unwrap();
+    /// terminal.draw(|frame| {
+    ///     // Indicate that 2 lines should scroll into scrollback
+    ///     frame.set_scroll_up(2);
+    ///     // Render your content...
+    /// })?;
+    /// # std::io::Result::Ok(())
+    /// ```
+    ///
+    /// This method is only available when the `scrolling-regions` feature is enabled.
+    #[cfg(feature = "scrolling-regions")]
+    pub fn set_scroll_up(&mut self, lines: u16) {
+        self.scroll_up = lines;
     }
 }
