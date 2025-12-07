@@ -1,6 +1,28 @@
+#[cfg(feature = "native-scrolling")]
+use alloc::vec::Vec;
+
 use crate::buffer::Buffer;
+#[cfg(feature = "native-scrolling")]
+use crate::buffer::Cell;
 use crate::layout::{Position, Rect};
 use crate::widgets::{StatefulWidget, Widget};
+
+/// Captured snapshot of buffer content for native scrollback.
+///
+/// This is created when [`Frame::set_scroll_up`] is called, capturing the current
+/// buffer state at that moment. This allows overlays (like modals) to be rendered
+/// after calling `set_scroll_up` without affecting what goes to scrollback.
+#[cfg(feature = "native-scrolling")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ScrollSnapshot {
+    /// Number of lines to scroll into native scrollback.
+    pub(crate) lines: u16,
+    /// Captured cells from the top `lines` rows of the buffer at the time
+    /// `set_scroll_up` was called. Length is `lines * width`.
+    pub(crate) content: Vec<Cell>,
+    /// Width of each row in the snapshot.
+    pub(crate) width: u16,
+}
 
 /// A consistent view into the terminal state for rendering a single frame.
 ///
@@ -13,7 +35,7 @@ use crate::widgets::{StatefulWidget, Widget};
 ///
 /// [`Buffer`]: crate::buffer::Buffer
 /// [`Terminal::draw`]: crate::terminal::Terminal::draw
-#[derive(Debug, Hash)]
+#[derive(Debug)]
 pub struct Frame<'a> {
     /// Where should the cursor be after drawing this frame?
     ///
@@ -30,15 +52,15 @@ pub struct Frame<'a> {
     /// The frame count indicating the sequence number of this frame.
     pub(crate) count: usize,
 
-    /// Number of lines to scroll up (content moves up, top lines go to scrollback).
+    /// Captured scroll snapshot for native scrollback support.
     ///
-    /// When set, the terminal will use native scrolling to push the top N lines into the
-    /// terminal's scrollback buffer before rendering. This is useful for applications like
-    /// log viewers where content continuously scrolls.
+    /// When [`set_scroll_up`](Frame::set_scroll_up) is called, the current buffer state
+    /// is captured into this snapshot. This allows the application to continue rendering
+    /// (e.g., adding modals) without affecting what goes to the native scrollback buffer.
     ///
-    /// This field is only available when the `scrolling-regions` feature is enabled.
-    #[cfg(feature = "scrolling-regions")]
-    pub(crate) scroll_up: u16,
+    /// This field is only available when the `native-scrolling` feature is enabled.
+    #[cfg(feature = "native-scrolling")]
+    pub(crate) scroll_snapshot: Option<ScrollSnapshot>,
 }
 
 /// `CompletedFrame` represents the state of the terminal after all changes performed in the last
@@ -200,37 +222,64 @@ impl Frame<'_> {
         self.count
     }
 
-    /// Sets the number of lines to scroll up before rendering this frame.
+    /// Sets the number of lines to scroll up and captures the current buffer state.
     ///
-    /// When this is set, the terminal will use native terminal scrolling to push the top N lines
-    /// into the terminal's scrollback buffer before rendering the new frame content. This is
-    /// useful for applications like log viewers where content continuously scrolls upward.
+    /// When this is called, the terminal will use native terminal scrolling to push the
+    /// captured content into the terminal's scrollback buffer before rendering the new frame.
+    /// This is useful for applications like log viewers where content continuously scrolls upward.
     ///
-    /// The scroll happens before the frame is rendered, so:
-    /// - The top `lines` rows from the previous frame are pushed into scrollback
-    /// - The remaining rows shift up
-    /// - New content is rendered into the bottom of the screen
+    /// **Important**: This method captures the current buffer state at the time it's called.
+    /// This means you should call it after rendering the scrollable content but before rendering
+    /// any overlays (like modals or popups). The captured content is what will be pushed to
+    /// scrollback, so overlays rendered after this call won't accidentally end up in scrollback.
     ///
-    /// This enables users to scroll back through the terminal's native scrollback to see
-    /// historical content that has scrolled off the top of the screen.
-    ///
-    /// # Example
+    /// # Recommended Usage Pattern
     ///
     /// ```rust,ignore
-    /// # use ratatui::{backend::TestBackend, Terminal};
-    /// # let backend = TestBackend::new(80, 25);
-    /// # let mut terminal = Terminal::new(backend).unwrap();
     /// terminal.draw(|frame| {
-    ///     // Indicate that 2 lines should scroll into scrollback
+    ///     // 1. First, render your main scrollable content
+    ///     render_log_content(frame);
+    ///
+    ///     // 2. Call set_scroll_up to capture content for scrollback
     ///     frame.set_scroll_up(2);
-    ///     // Render your content...
+    ///
+    ///     // 3. Now render any overlays (modals, popups, etc.)
+    ///     if show_modal {
+    ///         render_modal(frame);
+    ///     }
     /// })?;
-    /// # std::io::Result::Ok(())
     /// ```
     ///
-    /// This method is only available when the `scrolling-regions` feature is enabled.
-    #[cfg(feature = "scrolling-regions")]
+    /// # Parameters
+    ///
+    /// - `lines`: Number of lines from the top of the current buffer to push into scrollback.
+    ///   This value is treated as a hint - if it exceeds the viewport height, it will be clamped.
+    ///
+    /// # Multiple Calls
+    ///
+    /// If called multiple times during a single frame, subsequent calls will update the snapshot.
+    /// This allows for complex scenarios where the scroll amount needs to be adjusted.
+    ///
+    /// This method is only available when the `native-scrolling` feature is enabled.
+    #[cfg(feature = "native-scrolling")]
     pub fn set_scroll_up(&mut self, lines: u16) {
-        self.scroll_up = lines;
+        let width = self.viewport_area.width;
+        let height = self.viewport_area.height;
+        let lines = lines.min(height);
+
+        if lines == 0 {
+            self.scroll_snapshot = None;
+            return;
+        }
+
+        // Capture the top `lines` rows of the current buffer
+        let cells_to_capture = (lines as usize) * (width as usize);
+        let content = self.buffer.content[..cells_to_capture].to_vec();
+
+        self.scroll_snapshot = Some(ScrollSnapshot {
+            lines,
+            content,
+            width,
+        });
     }
 }

@@ -54,6 +54,17 @@ underline-color = []
 ## flickering. (i.e. Terminal::insert_before).
 scrolling-regions = []
 
+## Enable native terminal scrollback support. When enabled, applications can use
+## `Frame::set_scroll_up()` to push content into the terminal's native scrollback
+## buffer, allowing users to scroll back through historical content using the
+## terminal's built-in scrolling mechanism.
+##
+## This is useful for applications like log viewers where content continuously
+## scrolls upward. The scroll amount is treated as a hint - the framework captures
+## the buffer state when `set_scroll_up()` is called, so overlays rendered after
+## (like modals) won't accidentally be pushed to scrollback.
+native-scrolling = ["scrolling-regions"]
+
 ## enables serialization and deserialization of style and color types using the [`serde`] crate.
 ## This is useful if you want to save themes to a file.
 serde = ["std", "dep:serde", "bitflags/serde", "compact_str/serde"]

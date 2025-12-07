@@ -237,15 +237,15 @@ where
     /// terminal.swap_buffers();
     /// terminal.backend_mut().flush().unwrap();
     /// ```
-    pub const fn get_frame(&mut self) -> Frame<'_> {
+    pub fn get_frame(&mut self) -> Frame<'_> {
         let count = self.frame_count;
         Frame {
             cursor_position: None,
             viewport_area: self.viewport_area,
             buffer: self.current_buffer_mut(),
             count,
-            #[cfg(feature = "scrolling-regions")]
-            scroll_up: 0,
+            #[cfg(feature = "native-scrolling")]
+            scroll_snapshot: None,
         }
     }
 
@@ -278,30 +278,49 @@ where
 
     /// Flushes the current buffer to the terminal with native scrolling support.
     ///
-    /// This method first scrolls the terminal by the specified number of lines using native
-    /// terminal scrolling (which pushes the top lines into the terminal's scrollback buffer),
-    /// then computes and draws only the cells that differ from what the terminal now displays.
+    /// This method uses the captured scroll snapshot to push the correct content into the
+    /// terminal's native scrollback buffer, then computes and draws only the cells that
+    /// differ from what the terminal now displays.
     ///
-    /// This is more efficient than redrawing everything and enables applications to work with
-    /// the terminal's native scrollback buffer for continuous output like logs.
-    #[cfg(feature = "scrolling-regions")]
-    pub fn flush_with_scroll(&mut self, scroll_lines: u16) -> Result<(), B::Error> {
+    /// The snapshot content is written to the terminal first, ensuring that the intended
+    /// content (not overlay/modal content) goes to scrollback. This is useful for applications
+    /// that render modals over scrollable content.
+    #[cfg(feature = "native-scrolling")]
+    pub fn flush_with_scroll(
+        &mut self,
+        snapshot: crate::terminal::frame::ScrollSnapshot,
+    ) -> Result<(), B::Error> {
+        use alloc::vec::Vec;
+
         let height = self.viewport_area.height;
         let width = self.viewport_area.width;
-
-        // Clamp scroll_lines to the viewport height
-        let scroll_lines = scroll_lines.min(height);
+        let scroll_lines = snapshot.lines;
 
         if scroll_lines == 0 {
             return self.flush();
         }
 
-        // First, perform the native scroll on the terminal.
-        // This pushes the top `scroll_lines` rows into the terminal's scrollback buffer.
+        // Step 1: Write the snapshot content to the terminal rows 0..scroll_lines.
+        // This ensures that the captured content (without overlays) goes to scrollback,
+        // not whatever was previously displayed (which might have had modals).
+        let snapshot_updates: Vec<(u16, u16, &Cell)> = snapshot
+            .content
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| {
+                let col = (i % snapshot.width as usize) as u16;
+                let row = (i / snapshot.width as usize) as u16;
+                (col, row, cell)
+            })
+            .collect();
+        self.backend.draw(snapshot_updates.into_iter())?;
+
+        // Step 2: Perform the native scroll on the terminal.
+        // This pushes the snapshot content (rows 0..scroll_lines) into scrollback.
         self.backend.scroll_region_up(0..height, scroll_lines)?;
 
         // After scrolling, the terminal display is:
-        // - Row 0 now contains what was row `scroll_lines`
+        // - Row 0 now contains what was row `scroll_lines` (from previous buffer)
         // - Row 1 now contains what was row `scroll_lines + 1`
         // - ...
         // - Row `height - scroll_lines - 1` now contains what was row `height - 1`
@@ -313,7 +332,7 @@ where
         let previous_buffer = &self.buffers[1 - self.current];
         let current_buffer = &self.buffers[self.current];
 
-        let mut updates: alloc::vec::Vec<(u16, u16, &Cell)> = alloc::vec::Vec::new();
+        let mut updates: Vec<(u16, u16, &Cell)> = Vec::new();
 
         // For cells in the scrolled region (rows 0 to height - scroll_lines - 1),
         // compare against the shifted previous buffer
@@ -542,18 +561,18 @@ where
         // Buffer. Thus, we're taking the important data out of the Frame and dropping it.
         let cursor_position = frame.cursor_position;
 
-        // Extract scroll hint if scrolling-regions feature is enabled
-        #[cfg(feature = "scrolling-regions")]
-        let scroll_up = frame.scroll_up;
+        // Extract scroll snapshot if native-scrolling feature is enabled
+        #[cfg(feature = "native-scrolling")]
+        let scroll_snapshot = frame.scroll_snapshot.take();
 
-        // Draw to stdout, using native scrolling if scroll hint was set
-        #[cfg(feature = "scrolling-regions")]
-        if scroll_up > 0 {
-            self.flush_with_scroll(scroll_up)?;
+        // Draw to stdout, using native scrolling if scroll snapshot was captured
+        #[cfg(feature = "native-scrolling")]
+        if let Some(snapshot) = scroll_snapshot {
+            self.flush_with_scroll(snapshot)?;
         } else {
             self.flush()?;
         }
-        #[cfg(not(feature = "scrolling-regions"))]
+        #[cfg(not(feature = "native-scrolling"))]
         self.flush()?;
 
         match cursor_position {
@@ -1051,19 +1070,19 @@ mod tests {
         terminal.backend().assert_buffer_lines(["aaaaa", "aaaaa", "aaaaa"]);
     }
 
-    #[cfg(feature = "scrolling-regions")]
+    #[cfg(feature = "native-scrolling")]
     mod scroll_up_tests {
         use alloc::string::ToString;
 
         use super::*;
 
-        /// A widget that fills each row with a different character (a, b, c, ...)
-        struct RowFillWidget;
+        /// A widget that fills each row with a different character starting from given offset
+        struct RowFillWidgetFrom(u8);
 
-        impl Widget for RowFillWidget {
+        impl Widget for RowFillWidgetFrom {
             fn render(self, area: Rect, buf: &mut Buffer) {
                 for y in area.top()..area.bottom() {
-                    let ch = (b'a' + (y - area.top()) as u8) as char;
+                    let ch = (self.0 + (y - area.top()) as u8) as char;
                     for x in area.left()..area.right() {
                         buf[(x, y)].set_symbol(&ch.to_string());
                     }
@@ -1079,31 +1098,31 @@ mod tests {
             // First draw: fill with a, b, c, d
             terminal
                 .draw(|frame| {
-                    frame.render_widget(RowFillWidget, frame.area());
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
                 })
                 .unwrap();
 
             terminal.backend().assert_buffer_lines(["aaaaa", "bbbbb", "ccccc", "ddddd"]);
             terminal.backend().assert_scrollback_empty();
 
-            // Second draw: scroll up by 2 lines and fill with e, f, g, h
+            // Second draw: scroll up by 2 lines
+            // First render the content to be scrolled (a, b), then capture with set_scroll_up,
+            // then render the new content (c, d, e, f)
             terminal
                 .draw(|frame| {
+                    // Step 1: Render content that should go to scrollback
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
+                    // Step 2: Capture the top 2 rows for scrollback
                     frame.set_scroll_up(2);
-                    // Fill with e, f, g, h (starting from 'e' = 'a' + 4)
-                    for y in 0..4 {
-                        let ch = (b'e' + y as u8) as char;
-                        for x in 0..5 {
-                            frame.buffer_mut()[(x, y)].set_symbol(&ch.to_string());
-                        }
-                    }
+                    // Step 3: Render the new frame content (c, d, e, f)
+                    frame.render_widget(RowFillWidgetFrom(b'c'), frame.area());
                 })
                 .unwrap();
 
             // After scrolling up by 2:
-            // - Old rows 0, 1 (aaaaa, bbbbb) should be in scrollback
-            // - Screen should show e, f, g, h
-            terminal.backend().assert_buffer_lines(["eeeee", "fffff", "ggggg", "hhhhh"]);
+            // - Captured rows (aaaaa, bbbbb) should be in scrollback
+            // - Screen should show c, d, e, f
+            terminal.backend().assert_buffer_lines(["ccccc", "ddddd", "eeeee", "fffff"]);
             terminal
                 .backend()
                 .assert_scrollback_lines(["aaaaa", "bbbbb"]);
@@ -1117,7 +1136,7 @@ mod tests {
             // First draw
             terminal
                 .draw(|frame| {
-                    frame.render_widget(RowFillWidget, frame.area());
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
                 })
                 .unwrap();
 
@@ -1126,7 +1145,11 @@ mod tests {
             // Scroll entire screen
             terminal
                 .draw(|frame| {
+                    // Render content to be scrolled
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
+                    // Capture all 3 rows
                     frame.set_scroll_up(3);
+                    // Render new content
                     frame.render_widget(FillWidget('x'), frame.area());
                 })
                 .unwrap();
@@ -1138,39 +1161,41 @@ mod tests {
         }
 
         #[test]
-        fn set_scroll_up_partial_change() {
+        fn set_scroll_up_with_modal_overlay() {
+            // Test that modals rendered AFTER set_scroll_up don't go to scrollback
             let backend = TestBackend::new(5, 3);
             let mut terminal = Terminal::new(backend).unwrap();
 
-            // First draw: abc
+            // First draw: log content
             terminal
                 .draw(|frame| {
-                    frame.render_widget(RowFillWidget, frame.area());
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
                 })
                 .unwrap();
 
             terminal.backend().assert_buffer_lines(["aaaaa", "bbbbb", "ccccc"]);
 
-            // Second draw: scroll up by 1, but keep some content the same
-            // After scroll: terminal shows [b, c, empty]
-            // We want final result: [b, c, d]
+            // Second draw: scroll by 1, then overlay a "modal" on row 1
             terminal
                 .draw(|frame| {
+                    // Render the content to be scrolled (row 'a')
+                    for x in 0..5 {
+                        frame.buffer_mut()[(x, 0)].set_symbol("a");
+                    }
+                    // Capture row 0 for scrollback
                     frame.set_scroll_up(1);
-                    // Render b, c, d (which matches shifted content for first 2 rows)
-                    for y in 0..3 {
-                        let ch = (b'b' + y as u8) as char;
-                        for x in 0..5 {
-                            frame.buffer_mut()[(x, y)].set_symbol(&ch.to_string());
-                        }
+                    // Now render new content
+                    frame.render_widget(RowFillWidgetFrom(b'b'), frame.area());
+                    // Render a "modal" that overlays row 1
+                    for x in 0..5 {
+                        frame.buffer_mut()[(x, 1)].set_symbol("M");
                     }
                 })
                 .unwrap();
 
-            // Row 0 should be 'b' (matches post-scroll row 0, so no draw needed)
-            // Row 1 should be 'c' (matches post-scroll row 1, so no draw needed)
-            // Row 2 should be 'd' (new content)
-            terminal.backend().assert_buffer_lines(["bbbbb", "ccccc", "ddddd"]);
+            // Screen shows: b, M, d (modal on row 1)
+            terminal.backend().assert_buffer_lines(["bbbbb", "MMMMM", "ddddd"]);
+            // Scrollback has 'a' (the captured content, not the modal)
             terminal.backend().assert_scrollback_lines(["aaaaa"]);
         }
 
@@ -1181,7 +1206,7 @@ mod tests {
 
             terminal
                 .draw(|frame| {
-                    frame.render_widget(RowFillWidget, frame.area());
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
                 })
                 .unwrap();
 
@@ -1204,13 +1229,15 @@ mod tests {
 
             terminal
                 .draw(|frame| {
-                    frame.render_widget(RowFillWidget, frame.area());
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
                 })
                 .unwrap();
 
             // Scroll by more than height should be clamped
             terminal
                 .draw(|frame| {
+                    // Render content to be scrolled
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
                     frame.set_scroll_up(100); // Way more than height of 3
                     frame.render_widget(FillWidget('x'), frame.area());
                 })
@@ -1221,6 +1248,41 @@ mod tests {
             terminal
                 .backend()
                 .assert_scrollback_lines(["aaaa", "bbbb", "cccc"]);
+        }
+
+        #[test]
+        fn set_scroll_up_multiple_calls_updates_snapshot() {
+            let backend = TestBackend::new(4, 3);
+            let mut terminal = Terminal::new(backend).unwrap();
+
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
+                })
+                .unwrap();
+
+            terminal
+                .draw(|frame| {
+                    // First snapshot with 'x' content
+                    for x in 0..4 {
+                        frame.buffer_mut()[(x, 0)].set_symbol("x");
+                    }
+                    frame.set_scroll_up(1);
+
+                    // Second snapshot overwrites with 'y' content
+                    for x in 0..4 {
+                        frame.buffer_mut()[(x, 0)].set_symbol("y");
+                    }
+                    frame.set_scroll_up(1);
+
+                    // Final content
+                    frame.render_widget(RowFillWidgetFrom(b'b'), frame.area());
+                })
+                .unwrap();
+
+            terminal.backend().assert_buffer_lines(["bbbb", "cccc", "dddd"]);
+            // Scrollback should have 'y' (the last captured content)
+            terminal.backend().assert_scrollback_lines(["yyyy"]);
         }
     }
 }
