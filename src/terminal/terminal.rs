@@ -254,8 +254,7 @@ where
     pub fn flush_with_scroll(
         &mut self,
         snapshot: crate::terminal::frame::ScrollSnapshot,
-    ) -> Result<(), B::Error> {
-        use alloc::vec::Vec;
+    ) -> io::Result<()> {
 
         let height = self.viewport_area.height;
         let width = self.viewport_area.width;
@@ -1001,8 +1000,6 @@ fn compute_inline_size<B: Backend>(
 
 #[cfg(test)]
 mod tests {
-    use alloc::string::ToString;
-
     use super::*;
     use crate::backend::TestBackend;
     use crate::buffer::Buffer;
@@ -1037,8 +1034,6 @@ mod tests {
 
     #[cfg(feature = "native-scrolling")]
     mod scroll_up_tests {
-        use alloc::string::ToString;
-
         use super::*;
 
         /// A widget that fills each row with a different character starting from given offset

@@ -1,13 +1,11 @@
-#[cfg(feature = "native-scrolling")]
-use alloc::vec::Vec;
-
 use crate::{
     buffer::Buffer,
-    #[cfg(feature = "native-scrolling")]
-    buffer::Cell,
     layout::{Position, Rect},
     widgets::{StatefulWidget, StatefulWidgetRef, Widget, WidgetRef},
 };
+
+#[cfg(feature = "native-scrolling")]
+use crate::buffer::Cell;
 
 /// Captured snapshot of buffer content for native scrollback.
 ///
