@@ -113,6 +113,7 @@ bitflags! {
         const REVERSED          = 0b0000_0100_0000;
         const HIDDEN            = 0b0000_1000_0000;
         const CROSSED_OUT       = 0b0001_0000_0000;
+        const EMPTY             = 0b0010_0000_0000;
     }
 }
 

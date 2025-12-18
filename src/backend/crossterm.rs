@@ -187,7 +187,14 @@ where
                 underline_color = cell.underline_color;
             }
 
-            queue!(self.writer, Print(cell.symbol()))?;
+            if (cell.modifier.contains(Modifier::EMPTY)) {
+                queue!(
+                    self.writer,
+                    Clear(crossterm::terminal::ClearType::UntilNewLine)
+                )?;
+            } else {
+                queue!(self.writer, Print(cell.symbol()))?;
+            }
         }
 
         #[cfg(feature = "underline-color")]
