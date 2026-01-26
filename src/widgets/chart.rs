@@ -213,7 +213,7 @@ impl LegendPosition {
         }
         if height_margin < 0 {
             return None;
-        };
+        }
 
         let (x, y) = match self {
             Self::TopRight => {
@@ -1119,7 +1119,7 @@ impl WidgetRef for Chart<'_> {
     }
 }
 
-impl<'a> Styled for Axis<'a> {
+impl Styled for Axis<'_> {
     type Item = Self;
 
     fn style(&self) -> Style {
@@ -1131,7 +1131,7 @@ impl<'a> Styled for Axis<'a> {
     }
 }
 
-impl<'a> Styled for Dataset<'a> {
+impl Styled for Dataset<'_> {
     type Item = Self;
 
     fn style(&self) -> Style {
@@ -1143,7 +1143,7 @@ impl<'a> Styled for Dataset<'a> {
     }
 }
 
-impl<'a> Styled for Chart<'a> {
+impl Styled for Chart<'_> {
     type Item = Self;
 
     fn style(&self) -> Style {

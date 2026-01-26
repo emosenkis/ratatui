@@ -378,7 +378,7 @@ where
             if area != self.last_known_area {
                 self.resize(area)?;
             }
-        };
+        }
         Ok(())
     }
 

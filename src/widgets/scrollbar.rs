@@ -172,7 +172,7 @@ pub enum ScrollDirection {
     Backward,
 }
 
-impl<'a> Default for Scrollbar<'a> {
+impl Default for Scrollbar<'_> {
     fn default() -> Self {
         Self::new(ScrollbarOrientation::default())
     }
@@ -496,7 +496,7 @@ impl ScrollbarState {
     }
 }
 
-impl<'a> StatefulWidget for Scrollbar<'a> {
+impl StatefulWidget for Scrollbar<'_> {
     type State = ScrollbarState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
@@ -584,9 +584,9 @@ impl Scrollbar<'_> {
     fn scollbar_area(&self, area: Rect) -> Rect {
         match self.orientation {
             ScrollbarOrientation::VerticalLeft => area.columns().next(),
-            ScrollbarOrientation::VerticalRight => area.columns().last(),
+            ScrollbarOrientation::VerticalRight => area.columns().next_back(),
             ScrollbarOrientation::HorizontalTop => area.rows().next(),
-            ScrollbarOrientation::HorizontalBottom => area.rows().last(),
+            ScrollbarOrientation::HorizontalBottom => area.rows().next_back(),
         }
         .expect("Scrollbar area is empty") // this should never happen as we check for empty area
     }

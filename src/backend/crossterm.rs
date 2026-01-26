@@ -187,7 +187,7 @@ where
                 underline_color = cell.underline_color;
             }
 
-            if (cell.modifier.contains(Modifier::EMPTY)) {
+            if cell.modifier.contains(Modifier::EMPTY) {
                 queue!(
                     self.writer,
                     Clear(crossterm::terminal::ClearType::UntilNewLine)
@@ -225,7 +225,7 @@ where
     fn get_cursor_position(&mut self) -> io::Result<Position> {
         crossterm::cursor::position()
             .map(|(x, y)| Position { x, y })
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+            .map_err(|e| io::Error::other(e.to_string()))
     }
 
     fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {

@@ -420,7 +420,7 @@ impl WidgetRef for LineGauge<'_> {
     }
 }
 
-impl<'a> Styled for Gauge<'a> {
+impl Styled for Gauge<'_> {
     type Item = Self;
 
     fn style(&self) -> Style {
@@ -432,7 +432,7 @@ impl<'a> Styled for Gauge<'a> {
     }
 }
 
-impl<'a> Styled for LineGauge<'a> {
+impl Styled for LineGauge<'_> {
     type Item = Self;
 
     fn style(&self) -> Style {

@@ -595,7 +595,7 @@ impl<'a> IntoIterator for &'a mut Text<'a> {
     }
 }
 
-impl<'a> From<String> for Text<'a> {
+impl From<String> for Text<'_> {
     fn from(s: String) -> Self {
         Self::raw(s)
     }
@@ -665,7 +665,7 @@ impl<'a> std::ops::Add<Line<'a>> for Text<'a> {
 /// Adds two `Text` together.
 ///
 /// This ignores the style and alignment of the second `Text`.
-impl<'a> std::ops::Add<Self> for Text<'a> {
+impl std::ops::Add<Self> for Text<'_> {
     type Output = Self;
 
     fn add(mut self, text: Self) -> Self::Output {
@@ -741,7 +741,7 @@ impl WidgetRef for Text<'_> {
     }
 }
 
-impl<'a> Styled for Text<'a> {
+impl Styled for Text<'_> {
     type Item = Self;
 
     fn style(&self) -> Style {

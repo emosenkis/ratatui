@@ -276,7 +276,7 @@ pub struct Table<'a> {
     flex: Flex,
 }
 
-impl<'a> Default for Table<'a> {
+impl Default for Table<'_> {
     fn default() -> Self {
         Self {
             rows: Vec::new(),
@@ -908,7 +908,7 @@ impl Table<'_> {
                 };
                 buf.set_style(selection_area, row.style);
                 highlight_symbol.render_ref(selection_area, buf);
-            };
+            }
             for ((x, width), cell) in columns_widths.iter().zip(row.cells.iter()) {
                 cell.render(
                     Rect::new(row_area.x + x, row_area.y, *width, row_area.height),
@@ -1055,7 +1055,7 @@ fn ensure_percentages_less_than_100(widths: &[Constraint]) {
     }
 }
 
-impl<'a> Styled for Table<'a> {
+impl Styled for Table<'_> {
     type Item = Self;
 
     fn style(&self) -> Style {

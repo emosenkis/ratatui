@@ -405,7 +405,7 @@ impl<'a> std::ops::Add<Self> for Span<'a> {
     }
 }
 
-impl<'a> Styled for Span<'a> {
+impl Styled for Span<'_> {
     type Item = Self;
 
     fn style(&self) -> Style {

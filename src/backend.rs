@@ -295,8 +295,7 @@ pub trait Backend {
             ClearType::AfterCursor
             | ClearType::BeforeCursor
             | ClearType::CurrentLine
-            | ClearType::UntilNewLine => Err(io::Error::new(
-                io::ErrorKind::Other,
+            | ClearType::UntilNewLine => Err(io::Error::other(
                 format!("clear_type [{clear_type:?}] not supported with this backend"),
             )),
         }

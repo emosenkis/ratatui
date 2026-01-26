@@ -986,7 +986,7 @@ impl BlockExt for Option<Block<'_>> {
     }
 }
 
-impl<'a> Styled for Block<'a> {
+impl Styled for Block<'_> {
     type Item = Self;
 
     fn style(&self) -> Style {

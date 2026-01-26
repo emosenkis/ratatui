@@ -597,7 +597,7 @@ impl<'a> IntoIterator for &'a mut Line<'a> {
     }
 }
 
-impl<'a> From<String> for Line<'a> {
+impl From<String> for Line<'_> {
     fn from(s: String) -> Self {
         Self::raw(s)
     }
@@ -736,7 +736,7 @@ impl Line<'_> {
                 Some(Alignment::Left) | None => 0,
             };
             render_spans(&self.spans, area, buf, skip_width);
-        };
+        }
     }
 }
 
@@ -830,7 +830,7 @@ impl fmt::Display for Line<'_> {
     }
 }
 
-impl<'a> Styled for Line<'a> {
+impl Styled for Line<'_> {
     type Item = Self;
 
     fn style(&self) -> Style {
