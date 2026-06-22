@@ -248,14 +248,16 @@ where
     /// differ from what the terminal now displays.
     ///
     /// The snapshot content is written to the terminal first, ensuring that the intended
-    /// content (not overlay/modal content) goes to scrollback. This is useful for applications
-    /// that render modals over scrollable content.
+    /// content (not overlay/modal content) goes to scrollback. It is streamed from the top-left
+    /// corner as normal terminal output, then extra line advances are emitted to scroll those rows
+    /// into native scrollback. This relies on normal main-screen linefeed scrolling rather than
+    /// scrolling-region escape sequences, because terminals differ on whether scrolling-region
+    /// operations append rows to native scrollback.
     #[cfg(feature = "native-scrolling")]
     pub fn flush_with_scroll(
         &mut self,
         snapshot: crate::terminal::frame::ScrollSnapshot,
     ) -> io::Result<()> {
-
         let height = self.viewport_area.height;
         let width = self.viewport_area.width;
         let scroll_lines = snapshot.lines;
@@ -264,66 +266,34 @@ where
             return self.flush();
         }
 
-        // Step 1: Write the snapshot content to the terminal rows 0..scroll_lines.
-        // This ensures that the captured content (without overlays) goes to scrollback,
-        // not whatever was previously displayed (which might have had modals).
-        let snapshot_updates: Vec<(u16, u16, &Cell)> = snapshot
-            .content
-            .iter()
-            .enumerate()
-            .map(|(i, cell)| {
-                let col = (i % snapshot.width as usize) as u16;
-                let row = (i / snapshot.width as usize) as u16;
-                (col, row, cell)
-            })
-            .collect();
-        self.backend.draw(snapshot_updates.into_iter())?;
-
-        // Step 2: Perform the native scroll on the terminal.
-        // This pushes the snapshot content (rows 0..scroll_lines) into scrollback.
-        self.backend.scroll_region_up(0..height, scroll_lines)?;
-
-        // After scrolling, the terminal display is:
-        // - Row 0 now contains what was row `scroll_lines` (from previous buffer)
-        // - Row 1 now contains what was row `scroll_lines + 1`
-        // - ...
-        // - Row `height - scroll_lines - 1` now contains what was row `height - 1`
-        // - Rows `height - scroll_lines` to `height - 1` are now empty (cleared by scroll)
-        //
-        // To compute the correct diff, we need to compare the current buffer against
-        // what the terminal now shows (the "post-scroll" state of the previous buffer).
+        // Stream the snapshot rows as normal terminal output from the top-left corner, then emit
+        // enough line advances to scroll exactly those rows into native scrollback. This leaves
+        // the visible terminal area blank, so the final redraw compares against an empty screen.
+        self.backend.stream_lines_to_scrollback(
+            &snapshot.content,
+            snapshot.width,
+            scroll_lines,
+            height,
+        )?;
 
         let previous_buffer = &self.buffers[1 - self.current];
         let current_buffer = &self.buffers[self.current];
 
         let mut updates: Vec<(u16, u16, &Cell)> = Vec::new();
-
-        // For cells in the scrolled region (rows 0 to height - scroll_lines - 1),
-        // compare against the shifted previous buffer
-        for row in 0..(height.saturating_sub(scroll_lines)) {
-            let prev_row = row + scroll_lines;
-            for col in 0..width {
-                let current_idx = (row as usize) * (width as usize) + (col as usize);
-                let prev_idx = (prev_row as usize) * (width as usize) + (col as usize);
-
-                let current_cell = &current_buffer.content[current_idx];
-                let prev_cell = &previous_buffer.content[prev_idx];
-
-                if !current_cell.skip && current_cell != prev_cell {
-                    updates.push((col, row, current_cell));
-                }
-            }
-        }
-
-        // For cells in the newly cleared region (rows height - scroll_lines to height - 1),
-        // compare against an empty cell
         let empty_cell = Cell::EMPTY;
-        for row in (height.saturating_sub(scroll_lines))..height {
+        for row in 0..height {
             for col in 0..width {
                 let current_idx = (row as usize) * (width as usize) + (col as usize);
                 let current_cell = &current_buffer.content[current_idx];
+                let post_stream_cell = if row + scroll_lines < height {
+                    let prev_idx =
+                        ((row + scroll_lines) as usize) * (width as usize) + (col as usize);
+                    &previous_buffer.content[prev_idx]
+                } else {
+                    &empty_cell
+                };
 
-                if !current_cell.skip && current_cell != &empty_cell {
+                if !current_cell.skip && current_cell != post_stream_cell {
                     updates.push((col, row, current_cell));
                 }
             }
@@ -1029,12 +999,132 @@ mod tests {
             })
             .unwrap();
 
-        terminal.backend().assert_buffer_lines(["aaaaa", "aaaaa", "aaaaa"]);
+        terminal
+            .backend()
+            .assert_buffer_lines(["aaaaa", "aaaaa", "aaaaa"]);
     }
 
     #[cfg(feature = "native-scrolling")]
     mod scroll_up_tests {
         use super::*;
+        use std::io;
+
+        use crate::backend::{Backend, ClearType, WindowSize};
+        use crate::layout::{Position, Size};
+
+        struct ScrollSpyBackend {
+            inner: TestBackend,
+            draw_calls: usize,
+            draw_update_counts: Vec<usize>,
+            draw_updates: Vec<Vec<(u16, u16, Cell)>>,
+            append_lines_calls: Vec<u16>,
+            scroll_region_up_calls: Vec<(std::ops::Range<u16>, u16)>,
+            stream_lines_to_scrollback_calls: Vec<(u16, u16, u16)>,
+        }
+
+        impl ScrollSpyBackend {
+            fn new(width: u16, height: u16) -> Self {
+                Self {
+                    inner: TestBackend::new(width, height),
+                    draw_calls: 0,
+                    draw_update_counts: Vec::new(),
+                    draw_updates: Vec::new(),
+                    append_lines_calls: Vec::new(),
+                    scroll_region_up_calls: Vec::new(),
+                    stream_lines_to_scrollback_calls: Vec::new(),
+                }
+            }
+        }
+
+        impl Backend for ScrollSpyBackend {
+            fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+            where
+                I: Iterator<Item = (u16, u16, &'a Cell)>,
+            {
+                self.draw_calls += 1;
+                let updates = content
+                    .map(|(x, y, cell)| (x, y, cell.clone()))
+                    .collect::<Vec<_>>();
+                self.draw_update_counts.push(updates.len());
+                self.draw_updates.push(updates.clone());
+                self.inner
+                    .draw(updates.iter().map(|(x, y, cell)| (*x, *y, cell)))
+            }
+
+            fn append_lines(&mut self, n: u16) -> io::Result<()> {
+                self.append_lines_calls.push(n);
+                self.inner.append_lines(n)
+            }
+
+            fn stream_lines_to_scrollback(
+                &mut self,
+                content: &[Cell],
+                width: u16,
+                line_count: u16,
+                screen_height: u16,
+            ) -> io::Result<()> {
+                self.stream_lines_to_scrollback_calls
+                    .push((width, line_count, screen_height));
+                self.inner
+                    .stream_lines_to_scrollback(content, width, line_count, screen_height)
+            }
+
+            fn hide_cursor(&mut self) -> io::Result<()> {
+                self.inner.hide_cursor()
+            }
+
+            fn show_cursor(&mut self) -> io::Result<()> {
+                self.inner.show_cursor()
+            }
+
+            fn get_cursor_position(&mut self) -> io::Result<Position> {
+                self.inner.get_cursor_position()
+            }
+
+            fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+                self.inner.set_cursor_position(position)
+            }
+
+            fn clear(&mut self) -> io::Result<()> {
+                self.inner.clear()
+            }
+
+            fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
+                self.inner.clear_region(clear_type)
+            }
+
+            fn size(&self) -> io::Result<Size> {
+                self.inner.size()
+            }
+
+            fn window_size(&mut self) -> io::Result<WindowSize> {
+                self.inner.window_size()
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                self.inner.flush()
+            }
+
+            #[cfg(feature = "scrolling-regions")]
+            fn scroll_region_up(
+                &mut self,
+                region: std::ops::Range<u16>,
+                line_count: u16,
+            ) -> io::Result<()> {
+                self.scroll_region_up_calls
+                    .push((region.clone(), line_count));
+                self.inner.scroll_region_up(region, line_count)
+            }
+
+            #[cfg(feature = "scrolling-regions")]
+            fn scroll_region_down(
+                &mut self,
+                region: std::ops::Range<u16>,
+                line_count: u16,
+            ) -> io::Result<()> {
+                self.inner.scroll_region_down(region, line_count)
+            }
+        }
 
         /// A widget that fills each row with a different character starting from given offset
         struct RowFillWidgetFrom(u8);
@@ -1062,7 +1152,9 @@ mod tests {
                 })
                 .unwrap();
 
-            terminal.backend().assert_buffer_lines(["aaaaa", "bbbbb", "ccccc", "ddddd"]);
+            terminal
+                .backend()
+                .assert_buffer_lines(["aaaaa", "bbbbb", "ccccc", "ddddd"]);
             terminal.backend().assert_scrollback_empty();
 
             // Second draw: scroll up by 2 lines
@@ -1082,10 +1174,92 @@ mod tests {
             // After scrolling up by 2:
             // - Captured rows (aaaaa, bbbbb) should be in scrollback
             // - Screen should show c, d, e, f
-            terminal.backend().assert_buffer_lines(["ccccc", "ddddd", "eeeee", "fffff"]);
+            terminal
+                .backend()
+                .assert_buffer_lines(["ccccc", "ddddd", "eeeee", "fffff"]);
             terminal
                 .backend()
                 .assert_scrollback_lines(["aaaaa", "bbbbb"]);
+        }
+
+        #[test]
+        fn set_scroll_up_streams_snapshot_without_absolute_draws() {
+            let backend = ScrollSpyBackend::new(5, 4);
+            let mut terminal = Terminal::new(backend).unwrap();
+
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
+                })
+                .unwrap();
+
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
+                    frame.set_scroll_up(2);
+                    frame.render_widget(RowFillWidgetFrom(b'c'), frame.area());
+                })
+                .unwrap();
+
+            let backend = terminal.backend();
+            assert_eq!(backend.stream_lines_to_scrollback_calls, vec![(5, 2, 4)]);
+            assert!(backend.append_lines_calls.is_empty());
+            assert!(backend.scroll_region_up_calls.is_empty());
+            // One draw for the initial frame and one draw for the final redraw after streaming.
+            // The scrollback snapshot itself must not be written with absolute-positioned draws.
+            assert_eq!(backend.draw_calls, 2);
+            backend
+                .inner
+                .assert_buffer_lines(["ccccc", "ddddd", "eeeee", "fffff"]);
+            backend.inner.assert_scrollback_lines(["aaaaa", "bbbbb"]);
+        }
+
+        #[test]
+        fn set_scroll_up_diffs_against_post_stream_screen_state() {
+            let backend = ScrollSpyBackend::new(5, 4);
+            let mut terminal = Terminal::new(backend).unwrap();
+
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
+                })
+                .unwrap();
+
+            terminal
+                .draw(|frame| {
+                    frame.render_widget(RowFillWidgetFrom(b'a'), frame.area());
+                    frame.set_scroll_up(2);
+                    // Rows c/d match what the terminal will physically show after streaming:
+                    // old rows c/d shifted to the top. Rows e/f must still be drawn.
+                    frame.render_widget(RowFillWidgetFrom(b'c'), frame.area());
+                })
+                .unwrap();
+
+            terminal
+                .backend()
+                .inner
+                .assert_buffer_lines(["ccccc", "ddddd", "eeeee", "fffff"]);
+            terminal
+                .backend()
+                .inner
+                .assert_scrollback_lines(["aaaaa", "bbbbb"]);
+            let final_updates = terminal.backend().draw_updates.last().unwrap();
+            assert!(
+                final_updates.iter().all(|(_, y, _)| *y >= 2),
+                "rows already present after streaming should not be redrawn"
+            );
+            assert!(
+                final_updates
+                    .iter()
+                    .any(|(_, y, cell)| *y == 2 && cell.symbol() == "e"),
+                "row e must be drawn after streaming"
+            );
+            assert!(
+                final_updates
+                    .iter()
+                    .any(|(_, y, cell)| *y == 3 && cell.symbol() == "f"),
+                "row f must be drawn after streaming"
+            );
         }
 
         #[test]
@@ -1100,7 +1274,9 @@ mod tests {
                 })
                 .unwrap();
 
-            terminal.backend().assert_buffer_lines(["aaaa", "bbbb", "cccc"]);
+            terminal
+                .backend()
+                .assert_buffer_lines(["aaaa", "bbbb", "cccc"]);
 
             // Scroll entire screen
             terminal
@@ -1114,7 +1290,9 @@ mod tests {
                 })
                 .unwrap();
 
-            terminal.backend().assert_buffer_lines(["xxxx", "xxxx", "xxxx"]);
+            terminal
+                .backend()
+                .assert_buffer_lines(["xxxx", "xxxx", "xxxx"]);
             terminal
                 .backend()
                 .assert_scrollback_lines(["aaaa", "bbbb", "cccc"]);
@@ -1133,7 +1311,9 @@ mod tests {
                 })
                 .unwrap();
 
-            terminal.backend().assert_buffer_lines(["aaaaa", "bbbbb", "ccccc"]);
+            terminal
+                .backend()
+                .assert_buffer_lines(["aaaaa", "bbbbb", "ccccc"]);
 
             // Second draw: scroll by 1, then overlay a "modal" on row 1
             terminal
@@ -1154,7 +1334,9 @@ mod tests {
                 .unwrap();
 
             // Screen shows: b, M, d (modal on row 1)
-            terminal.backend().assert_buffer_lines(["bbbbb", "MMMMM", "ddddd"]);
+            terminal
+                .backend()
+                .assert_buffer_lines(["bbbbb", "MMMMM", "ddddd"]);
             // Scrollback has 'a' (the captured content, not the modal)
             terminal.backend().assert_scrollback_lines(["aaaaa"]);
         }
@@ -1203,7 +1385,9 @@ mod tests {
                 })
                 .unwrap();
 
-            terminal.backend().assert_buffer_lines(["xxxx", "xxxx", "xxxx"]);
+            terminal
+                .backend()
+                .assert_buffer_lines(["xxxx", "xxxx", "xxxx"]);
             // All 3 lines should be in scrollback
             terminal
                 .backend()
@@ -1240,7 +1424,9 @@ mod tests {
                 })
                 .unwrap();
 
-            terminal.backend().assert_buffer_lines(["bbbb", "cccc", "dddd"]);
+            terminal
+                .backend()
+                .assert_buffer_lines(["bbbb", "cccc", "dddd"]);
             // Scrollback should have 'y' (the last captured content)
             terminal.backend().assert_scrollback_lines(["yyyy"]);
         }

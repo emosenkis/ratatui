@@ -180,6 +180,26 @@ pub trait Backend {
         Ok(())
     }
 
+    /// Stream rows from the top-left corner and scroll them into native terminal scrollback.
+    ///
+    /// Unlike [`draw`](Self::draw), this is intended to write the provided rows as normal terminal
+    /// output flow after positioning the cursor at the top-left corner. Implementations should
+    /// write each row sequentially, line-advance after each row, then line-advance enough
+    /// additional rows to scroll exactly `line_count` rows into native scrollback. After this
+    /// operation, the visible terminal area is expected to be blank.
+    ///
+    /// `content` contains `line_count * width` cells ordered row-major.
+    #[cfg(feature = "native-scrolling")]
+    fn stream_lines_to_scrollback(
+        &mut self,
+        _content: &[Cell],
+        _width: u16,
+        _line_count: u16,
+        _screen_height: u16,
+    ) -> io::Result<()> {
+        Ok(())
+    }
+
     /// Hide the cursor on the terminal screen.
     ///
     ///

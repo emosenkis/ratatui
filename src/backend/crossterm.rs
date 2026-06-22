@@ -257,6 +257,121 @@ where
         self.writer.flush()
     }
 
+    #[cfg(feature = "native-scrolling")]
+    fn stream_lines_to_scrollback(
+        &mut self,
+        content: &[Cell],
+        width: u16,
+        line_count: u16,
+        screen_height: u16,
+    ) -> io::Result<()> {
+        if width == 0 || line_count == 0 || screen_height == 0 {
+            return Ok(());
+        }
+
+        let width = width as usize;
+        let line_count = line_count as usize;
+
+        let mut fg = Color::Reset;
+        let mut bg = Color::Reset;
+        #[cfg(feature = "underline-color")]
+        let mut underline_color = Color::Reset;
+        let mut modifier = Modifier::empty();
+
+        // The stream-based scrollback path relies on normal full-screen
+        // scrolling. Reset host terminal margins/origin mode first so a
+        // leftover scrolling region cannot turn the final newlines into a
+        // region-local scroll that bypasses native scrollback.
+        write!(self.writer, "\x1b[r\x1b[?6l")?;
+        queue!(self.writer, MoveTo(0, 0))?;
+
+        for row in 0..line_count {
+            let start = row * width;
+            let end = start + width;
+            let row_cells = &content[start..end];
+            let line_width = row_cells
+                .iter()
+                .rposition(|cell| !cell.modifier.contains(Modifier::EMPTY))
+                .map_or(0, |idx| idx + 1);
+
+            for cell in &row_cells[..line_width] {
+                let cell_modifier = if cell.modifier.contains(Modifier::EMPTY) {
+                    Modifier::empty()
+                } else {
+                    cell.modifier
+                };
+                if cell_modifier != modifier {
+                    let diff = ModifierDiff {
+                        from: modifier,
+                        to: cell_modifier,
+                    };
+                    diff.queue(&mut self.writer)?;
+                    modifier = cell_modifier;
+                }
+                let (cell_fg, cell_bg) = if cell.modifier.contains(Modifier::EMPTY) {
+                    (Color::Reset, Color::Reset)
+                } else {
+                    (cell.fg, cell.bg)
+                };
+                if cell_fg != fg || cell_bg != bg {
+                    queue!(
+                        self.writer,
+                        SetColors(Colors::new(cell_fg.into(), cell_bg.into()))
+                    )?;
+                    fg = cell_fg;
+                    bg = cell_bg;
+                }
+                #[cfg(feature = "underline-color")]
+                {
+                    let cell_underline_color = if cell.modifier.contains(Modifier::EMPTY) {
+                        Color::Reset
+                    } else {
+                        cell.underline_color
+                    };
+                    if cell_underline_color != underline_color {
+                        let color = CColor::from(cell_underline_color);
+                        queue!(self.writer, SetUnderlineColor(color))?;
+                        underline_color = cell_underline_color;
+                    }
+                }
+
+                if cell.modifier.contains(Modifier::EMPTY) || cell.skip {
+                    queue!(self.writer, Print(" "))?;
+                } else {
+                    queue!(self.writer, Print(cell.symbol()))?;
+                }
+            }
+            if line_width < width {
+                queue!(
+                    self.writer,
+                    Clear(crossterm::terminal::ClearType::UntilNewLine)
+                )?;
+            }
+            queue!(self.writer, Print("\r\n"))?;
+        }
+
+        for _ in 0..screen_height.saturating_sub(1) {
+            queue!(self.writer, Print("\r\n"))?;
+        }
+
+        #[cfg(feature = "underline-color")]
+        queue!(
+            self.writer,
+            SetForegroundColor(CColor::Reset),
+            SetBackgroundColor(CColor::Reset),
+            SetUnderlineColor(CColor::Reset),
+            SetAttribute(CAttribute::Reset),
+        )?;
+        #[cfg(not(feature = "underline-color"))]
+        queue!(
+            self.writer,
+            SetForegroundColor(CColor::Reset),
+            SetBackgroundColor(CColor::Reset),
+            SetAttribute(CAttribute::Reset),
+        )?;
+        self.writer.flush()
+    }
+
     fn size(&self) -> io::Result<Size> {
         let (width, height) = terminal::size()?;
         Ok(Size { width, height })
@@ -617,6 +732,74 @@ impl crate::crossterm::Command for ScrollDownInRegion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "native-scrolling")]
+    fn cell(symbol: &str) -> Cell {
+        let mut cell = Cell::EMPTY;
+        cell.set_symbol(symbol);
+        cell
+    }
+
+    #[cfg(feature = "native-scrolling")]
+    fn empty_cell() -> Cell {
+        let mut cell = Cell::EMPTY;
+        cell.modifier = Modifier::EMPTY;
+        cell
+    }
+
+    #[test]
+    #[cfg(feature = "native-scrolling")]
+    fn stream_lines_to_scrollback_clears_short_rows_to_end_of_line() {
+        let mut backend = CrosstermBackend::new(Vec::new());
+        let content = vec![
+            cell("a"),
+            cell("b"),
+            cell("c"),
+            empty_cell(),
+            empty_cell(),
+            cell("d"),
+            cell("e"),
+            cell("f"),
+            cell("g"),
+            cell("h"),
+        ];
+
+        backend
+            .stream_lines_to_scrollback(&content, 5, 2, 3)
+            .unwrap();
+
+        let output = String::from_utf8(backend.writer).unwrap();
+        assert_eq!(output.matches("\x1b[K").count(), 1);
+        assert!(
+            output.contains("abc\x1b[K\r\n"),
+            "short row should clear stale cells before advancing"
+        );
+        assert!(
+            output.contains("defgh\r\n"),
+            "full-width row should not need a clear-before-advance"
+        );
+        assert!(
+            !output.contains("defgh\x1b[K\r\n"),
+            "do not emit EL after writing through the last column"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "native-scrolling")]
+    fn stream_lines_to_scrollback_resets_margins_before_streaming() {
+        let mut backend = CrosstermBackend::new(Vec::new());
+        let content = vec![cell("a")];
+
+        backend
+            .stream_lines_to_scrollback(&content, 1, 1, 1)
+            .unwrap();
+
+        let output = String::from_utf8(backend.writer).unwrap();
+        assert!(
+            output.starts_with("\x1b[r\x1b[?6l\x1b[1;1Ha\r\n"),
+            "scrollback streaming should reset DECSTBM/DECOM before writing"
+        );
+    }
 
     #[test]
     fn from_crossterm_color() {
