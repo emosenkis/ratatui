@@ -426,6 +426,17 @@ impl Buffer {
         }
     }
 
+    /// Mark all cells in the buffer as invalid for the next diff.
+    ///
+    /// This preserves the buffer dimensions while ensuring that every non-skipped cell in the next
+    /// buffer compares as changed, including blank cells.
+    pub fn invalidate(&mut self) {
+        for cell in &mut self.content {
+            cell.reset();
+            cell.set_skip(true);
+        }
+    }
+
     /// Merge an other buffer into this one
     pub fn merge(&mut self, other: &Self) {
         let area = self.area.union(other.area);

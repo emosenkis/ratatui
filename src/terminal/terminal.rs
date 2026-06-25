@@ -596,8 +596,9 @@ where
                 }
             }
         }
-        // Reset the back buffer to make sure the next update will redraw everything.
-        self.buffers[1 - self.current].reset();
+        // Invalidate the back buffer to make sure the next update redraws everything, including
+        // blank cells. A plain reset would make blank cells compare equal and skip drawing.
+        self.buffers[1 - self.current].invalidate();
         Ok(())
     }
 
