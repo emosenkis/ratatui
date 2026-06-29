@@ -285,9 +285,9 @@ where
             for col in 0..width {
                 let current_idx = (row as usize) * (width as usize) + (col as usize);
                 let current_cell = &current_buffer.content[current_idx];
-                let post_stream_cell = if row + scroll_lines < height {
+                let post_stream_cell = if (row as usize) + scroll_lines < height as usize {
                     let prev_idx =
-                        ((row + scroll_lines) as usize) * (width as usize) + (col as usize);
+                        ((row as usize + scroll_lines) * (width as usize)) + (col as usize);
                     &previous_buffer.content[prev_idx]
                 } else {
                     &empty_cell
@@ -1020,7 +1020,7 @@ mod tests {
             draw_updates: Vec<Vec<(u16, u16, Cell)>>,
             append_lines_calls: Vec<u16>,
             scroll_region_up_calls: Vec<(std::ops::Range<u16>, u16)>,
-            stream_lines_to_scrollback_calls: Vec<(u16, u16, u16)>,
+            stream_lines_to_scrollback_calls: Vec<(u16, usize, u16)>,
         }
 
         impl ScrollSpyBackend {
@@ -1061,7 +1061,7 @@ mod tests {
                 &mut self,
                 content: &[Cell],
                 width: u16,
-                line_count: u16,
+                line_count: usize,
                 screen_height: u16,
             ) -> io::Result<()> {
                 self.stream_lines_to_scrollback_calls
@@ -1213,6 +1213,38 @@ mod tests {
                 .inner
                 .assert_buffer_lines(["ccccc", "ddddd", "eeeee", "fffff"]);
             backend.inner.assert_scrollback_lines(["aaaaa", "bbbbb"]);
+        }
+
+        #[test]
+        fn set_scroll_snapshot_streams_more_than_viewport_height() {
+            let backend = ScrollSpyBackend::new(5, 4);
+            let mut terminal = Terminal::new(backend).unwrap();
+
+            terminal
+                .draw(|frame| {
+                    let mut content = Vec::new();
+                    for row in 0..6 {
+                        let symbol = ((b'a' + row) as char).to_string();
+                        for _ in 0..5 {
+                            let mut cell = Cell::default();
+                            cell.set_symbol(&symbol);
+                            content.push(cell);
+                        }
+                    }
+
+                    frame.set_scroll_snapshot(content, 5, 6);
+                    frame.render_widget(RowFillWidgetFrom(b'g'), frame.area());
+                })
+                .unwrap();
+
+            let backend = terminal.backend();
+            assert_eq!(backend.stream_lines_to_scrollback_calls, vec![(5, 6, 4)]);
+            backend
+                .inner
+                .assert_scrollback_lines(["aaaaa", "bbbbb", "ccccc", "ddddd", "eeeee", "fffff"]);
+            backend
+                .inner
+                .assert_buffer_lines(["ggggg", "hhhhh", "iiiii", "jjjjj"]);
         }
 
         #[test]

@@ -351,31 +351,29 @@ impl Backend for TestBackend {
         &mut self,
         content: &[Cell],
         width: u16,
-        line_count: u16,
+        line_count: usize,
         _screen_height: u16,
     ) -> io::Result<()> {
         if width == 0 || line_count == 0 {
             return Ok(());
         }
 
-        let cells_to_scrollback = width as usize * line_count as usize;
+        let cells_to_scrollback = width as usize * line_count;
         let old_content = self.buffer.content.clone();
-        self.buffer.content[..cells_to_scrollback].clone_from_slice(
-            &content
-                .iter()
-                .take(cells_to_scrollback)
-                .cloned()
-                .map(|mut cell| {
-                    if cell.modifier.contains(crate::style::Modifier::EMPTY) {
-                        cell.reset();
-                    }
-                    cell
-                })
-                .collect::<Vec<_>>(),
-        );
+        let streamed_cells = content
+            .iter()
+            .take(cells_to_scrollback)
+            .cloned()
+            .map(|mut cell| {
+                if cell.modifier.contains(crate::style::Modifier::EMPTY) {
+                    cell.reset();
+                }
+                cell
+            })
+            .collect::<Vec<_>>();
         append_to_scrollback(
             &mut self.scrollback,
-            self.buffer.content[0..cells_to_scrollback].iter().cloned(),
+            streamed_cells.iter().cloned(),
         );
         let old_row_cells_start = cells_to_scrollback.min(old_content.len());
         let old_row_cells_remaining = old_content.len() - old_row_cells_start;

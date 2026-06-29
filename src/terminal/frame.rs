@@ -16,7 +16,7 @@ use crate::buffer::Cell;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ScrollSnapshot {
     /// Number of lines to scroll into native scrollback.
-    pub(crate) lines: u16,
+    pub(crate) lines: usize,
     /// Captured cells from the top `lines` rows of the buffer at the time
     /// `set_scroll_up` was called. Length is `lines * width`.
     pub(crate) content: Vec<Cell>,
@@ -338,6 +338,26 @@ impl Frame<'_> {
         // Capture the top `lines` rows of the current buffer
         let cells_to_capture = (lines as usize) * (width as usize);
         let content = self.buffer.content[..cells_to_capture].to_vec();
+
+        self.scroll_snapshot = Some(ScrollSnapshot {
+            lines: lines as usize,
+            content,
+            width,
+        });
+    }
+
+    /// Sets explicit row content to stream into native scrollback.
+    ///
+    /// Unlike [`set_scroll_up`](Self::set_scroll_up), this method is not limited by the current
+    /// viewport height. `content` must contain `lines * width` cells in row-major order.
+    #[cfg(feature = "native-scrolling")]
+    pub fn set_scroll_snapshot(&mut self, content: Vec<Cell>, width: u16, lines: usize) {
+        if width == 0 || lines == 0 {
+            self.scroll_snapshot = None;
+            return;
+        }
+
+        debug_assert_eq!(content.len(), lines.saturating_mul(width as usize));
 
         self.scroll_snapshot = Some(ScrollSnapshot {
             lines,

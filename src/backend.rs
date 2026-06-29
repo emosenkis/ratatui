@@ -194,7 +194,7 @@ pub trait Backend {
         &mut self,
         _content: &[Cell],
         _width: u16,
-        _line_count: u16,
+        _line_count: usize,
         _screen_height: u16,
     ) -> io::Result<()> {
         Ok(())

@@ -262,7 +262,7 @@ where
         &mut self,
         content: &[Cell],
         width: u16,
-        line_count: u16,
+        line_count: usize,
         screen_height: u16,
     ) -> io::Result<()> {
         if width == 0 || line_count == 0 || screen_height == 0 {
@@ -270,7 +270,6 @@ where
         }
 
         let width = width as usize;
-        let line_count = line_count as usize;
 
         let mut fg = Color::Reset;
         let mut bg = Color::Reset;
