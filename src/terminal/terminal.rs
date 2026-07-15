@@ -282,6 +282,7 @@ where
 
         let mut updates: Vec<(u16, u16, &Cell)> = Vec::new();
         let empty_cell = Cell::EMPTY;
+        let mut force_soft_wrap_continuation = false;
         for row in 0..height {
             for col in 0..width {
                 let current_idx = (row as usize) * (width as usize) + (col as usize);
@@ -294,8 +295,15 @@ where
                     &empty_cell
                 };
 
-                if !current_cell.skip && current_cell != post_stream_cell {
+                let force_current = force_soft_wrap_continuation && col == 0;
+                if force_current {
+                    force_soft_wrap_continuation = false;
+                }
+                if !current_cell.skip && (force_current || current_cell != post_stream_cell) {
                     updates.push((col, row, current_cell));
+                    if current_cell.soft_wrap() {
+                        force_soft_wrap_continuation = true;
+                    }
                 }
             }
         }

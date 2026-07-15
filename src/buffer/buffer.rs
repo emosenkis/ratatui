@@ -504,10 +504,21 @@ impl Buffer {
         // Cells from the current buffer to skip due to preceding multi-width characters taking
         // their place (the skipped cells should be blank anyway), or due to per-cell-skipping:
         let mut to_skip: usize = 0;
+        let mut force_soft_wrap_continuation = false;
         for (i, (current, previous)) in next_buffer.iter().zip(previous_buffer.iter()).enumerate() {
-            if !current.skip && (current != previous || invalidated > 0) && to_skip == 0 {
-                let (x, y) = self.pos_of(i);
+            let (x, y) = self.pos_of(i);
+            let force_current = force_soft_wrap_continuation && x == 0;
+            if force_current {
+                force_soft_wrap_continuation = false;
+            }
+            if !current.skip
+                && (force_current || current != previous || invalidated > 0)
+                && to_skip == 0
+            {
                 updates.push((x, y, &next_buffer[i]));
+                if current.soft_wrap() {
+                    force_soft_wrap_continuation = true;
+                }
             }
 
             to_skip = current.symbol().width().saturating_sub(1);

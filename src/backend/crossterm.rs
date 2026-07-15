@@ -158,12 +158,17 @@ where
         let mut underline_color = Color::Reset;
         let mut modifier = Modifier::empty();
         let mut last_pos: Option<Position> = None;
+        let mut last_was_soft_wrap = false;
         for (x, y, cell) in content {
             // Move the cursor if the previous location was not (x - 1, y)
-            if !matches!(last_pos, Some(p) if x == p.x + 1 && y == p.y) {
+            let follows_previous_cell = matches!(last_pos, Some(p) if x == p.x + 1 && y == p.y);
+            let continues_soft_wrap =
+                last_was_soft_wrap && matches!(last_pos, Some(p) if x == 0 && y == p.y + 1);
+            if !follows_previous_cell && !continues_soft_wrap {
                 queue!(self.writer, MoveTo(x, y))?;
             }
             last_pos = Some(Position { x, y });
+            last_was_soft_wrap = cell.soft_wrap();
             if cell.modifier != modifier {
                 let diff = ModifierDiff {
                     from: modifier,

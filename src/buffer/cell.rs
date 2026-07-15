@@ -31,6 +31,9 @@ pub struct Cell {
 
     /// Whether the cell should be skipped when copying (diffing) the buffer to the screen.
     pub skip: bool,
+
+    /// Whether output after this cell should continue through terminal auto-wrapping.
+    soft_wrap: bool,
 }
 
 impl Cell {
@@ -52,6 +55,7 @@ impl Cell {
             underline_color: Color::Reset,
             modifier: Modifier::empty(),
             skip: false,
+            soft_wrap: false,
         }
     }
 
@@ -137,6 +141,17 @@ impl Cell {
         self
     }
 
+    /// Marks whether this cell ends a soft-wrapped physical row.
+    pub fn set_soft_wrap(&mut self, soft_wrap: bool) -> &mut Self {
+        self.soft_wrap = soft_wrap;
+        self
+    }
+
+    /// Returns whether this cell ends a soft-wrapped physical row.
+    pub const fn soft_wrap(&self) -> bool {
+        self.soft_wrap
+    }
+
     /// Resets the cell to the empty state.
     pub fn reset(&mut self) {
         self.symbol = CompactString::const_new(" ");
@@ -148,6 +163,7 @@ impl Cell {
         }
         self.modifier = Modifier::empty();
         self.skip = false;
+        self.soft_wrap = false;
     }
 }
 
@@ -182,6 +198,7 @@ mod tests {
                 underline_color: Color::Reset,
                 modifier: Modifier::empty(),
                 skip: false,
+                soft_wrap: false,
             }
         );
     }
