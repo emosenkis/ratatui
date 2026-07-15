@@ -188,7 +188,9 @@ pub trait Backend {
     /// additional rows to scroll exactly `line_count` rows into native scrollback. After this
     /// operation, the visible terminal area is expected to be blank.
     ///
-    /// `content` contains `line_count * width` cells ordered row-major.
+    /// `content` contains `line_count * width` cells ordered row-major. `row_wrapped` contains one
+    /// flag per row; a true flag means that row continues onto the next through terminal
+    /// auto-wrapping and must not be followed by an explicit line break.
     #[cfg(feature = "native-scrolling")]
     fn stream_lines_to_scrollback(
         &mut self,
@@ -196,6 +198,7 @@ pub trait Backend {
         _width: u16,
         _line_count: usize,
         _screen_height: u16,
+        _row_wrapped: &[bool],
     ) -> io::Result<()> {
         Ok(())
     }

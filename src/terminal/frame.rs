@@ -22,6 +22,8 @@ pub struct ScrollSnapshot {
     pub(crate) content: Vec<Cell>,
     /// Width of each row in the snapshot.
     pub(crate) width: u16,
+    /// Whether each physical row continues onto the next through terminal auto-wrapping.
+    pub(crate) row_wrapped: Vec<bool>,
 }
 
 /// A consistent view into the terminal state for rendering a single frame.
@@ -343,6 +345,7 @@ impl Frame<'_> {
             lines: lines as usize,
             content,
             width,
+            row_wrapped: vec![false; lines as usize],
         });
     }
 
@@ -351,18 +354,26 @@ impl Frame<'_> {
     /// Unlike [`set_scroll_up`](Self::set_scroll_up), this method is not limited by the current
     /// viewport height. `content` must contain `lines * width` cells in row-major order.
     #[cfg(feature = "native-scrolling")]
-    pub fn set_scroll_snapshot(&mut self, content: Vec<Cell>, width: u16, lines: usize) {
+    pub fn set_scroll_snapshot(
+        &mut self,
+        content: Vec<Cell>,
+        width: u16,
+        lines: usize,
+        row_wrapped: Vec<bool>,
+    ) {
         if width == 0 || lines == 0 {
             self.scroll_snapshot = None;
             return;
         }
 
         debug_assert_eq!(content.len(), lines.saturating_mul(width as usize));
+        debug_assert_eq!(row_wrapped.len(), lines);
 
         self.scroll_snapshot = Some(ScrollSnapshot {
             lines,
             content,
             width,
+            row_wrapped,
         });
     }
 }

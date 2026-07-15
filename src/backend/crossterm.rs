@@ -264,10 +264,13 @@ where
         width: u16,
         line_count: usize,
         screen_height: u16,
+        row_wrapped: &[bool],
     ) -> io::Result<()> {
         if width == 0 || line_count == 0 || screen_height == 0 {
             return Ok(());
         }
+
+        debug_assert_eq!(row_wrapped.len(), line_count);
 
         let width = width as usize;
 
@@ -340,13 +343,32 @@ where
                     queue!(self.writer, Print(cell.symbol()))?;
                 }
             }
-            if line_width < width {
+            let wrapped = row_wrapped.get(row).copied().unwrap_or(false);
+            if line_width < width && !wrapped {
                 queue!(
                     self.writer,
                     Clear(crossterm::terminal::ClearType::UntilNewLine)
                 )?;
             }
-            queue!(self.writer, Print("\r\n"))?;
+            if !wrapped {
+                queue!(self.writer, Print("\r\n"))?;
+            }
+        }
+
+        // If the snapshot ends mid-logical-line, its continuation has not been streamed yet.
+        // Trigger the host's pending auto-wrap with a temporary cell so this final physical row
+        // still advances and retains its soft-wrap metadata. Erase the cell immediately; the
+        // current frame redraw will later supply the real continuation.
+        if row_wrapped
+            .get(line_count.saturating_sub(1))
+            .copied()
+            .unwrap_or(false)
+        {
+            queue!(
+                self.writer,
+                Print(" \x08"),
+                Clear(crossterm::terminal::ClearType::UntilNewLine)
+            )?;
         }
 
         for _ in 0..screen_height.saturating_sub(1) {
@@ -764,7 +786,7 @@ mod tests {
         ];
 
         backend
-            .stream_lines_to_scrollback(&content, 5, 2, 3)
+            .stream_lines_to_scrollback(&content, 5, 2, 3, &[false, false])
             .unwrap();
 
         let output = String::from_utf8(backend.writer).unwrap();
@@ -790,13 +812,34 @@ mod tests {
         let content = vec![cell("a")];
 
         backend
-            .stream_lines_to_scrollback(&content, 1, 1, 1)
+            .stream_lines_to_scrollback(&content, 1, 1, 1, &[false])
             .unwrap();
 
         let output = String::from_utf8(backend.writer).unwrap();
         assert!(
             output.starts_with("\x1b[r\x1b[?6l\x1b[1;1Ha\r\n"),
             "scrollback streaming should reset DECSTBM/DECOM before writing"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "native-scrolling")]
+    fn stream_lines_to_scrollback_preserves_soft_wrapped_rows() {
+        let mut backend = CrosstermBackend::new(Vec::new());
+        let content = vec![cell("a"), cell("b"), cell("c"), cell("d")];
+
+        backend
+            .stream_lines_to_scrollback(&content, 2, 2, 2, &[true, true])
+            .unwrap();
+
+        let output = String::from_utf8(backend.writer).unwrap();
+        assert!(
+            output.contains("abcd \x08"),
+            "the final pending auto-wrap should be triggered without adding content: {output:?}"
+        );
+        assert!(
+            !output.contains("ab\r\ncd"),
+            "soft wrap must not become a copied newline: {output:?}"
         );
     }
 

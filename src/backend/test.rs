@@ -353,10 +353,13 @@ impl Backend for TestBackend {
         width: u16,
         line_count: usize,
         _screen_height: u16,
+        row_wrapped: &[bool],
     ) -> io::Result<()> {
         if width == 0 || line_count == 0 {
             return Ok(());
         }
+
+        debug_assert_eq!(row_wrapped.len(), line_count);
 
         let cells_to_scrollback = width as usize * line_count;
         let old_content = self.buffer.content.clone();

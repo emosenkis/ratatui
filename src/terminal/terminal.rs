@@ -274,6 +274,7 @@ where
             snapshot.width,
             scroll_lines,
             height,
+            &snapshot.row_wrapped,
         )?;
 
         let previous_buffer = &self.buffers[1 - self.current];
@@ -1063,11 +1064,17 @@ mod tests {
                 width: u16,
                 line_count: usize,
                 screen_height: u16,
+                row_wrapped: &[bool],
             ) -> io::Result<()> {
                 self.stream_lines_to_scrollback_calls
                     .push((width, line_count, screen_height));
-                self.inner
-                    .stream_lines_to_scrollback(content, width, line_count, screen_height)
+                self.inner.stream_lines_to_scrollback(
+                    content,
+                    width,
+                    line_count,
+                    screen_height,
+                    row_wrapped,
+                )
             }
 
             fn hide_cursor(&mut self) -> io::Result<()> {
@@ -1232,7 +1239,7 @@ mod tests {
                         }
                     }
 
-                    frame.set_scroll_snapshot(content, 5, 6);
+                    frame.set_scroll_snapshot(content, 5, 6, vec![false; 6]);
                     frame.render_widget(RowFillWidgetFrom(b'g'), frame.area());
                 })
                 .unwrap();
