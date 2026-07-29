@@ -348,6 +348,16 @@ where
                     queue!(self.writer, Print(cell.symbol()))?;
                 }
             }
+            if fg != Color::Reset || bg != Color::Reset || !modifier.is_empty() {
+                queue!(self.writer, SetAttribute(CAttribute::Reset))?;
+                fg = Color::Reset;
+                bg = Color::Reset;
+                modifier = Modifier::empty();
+                #[cfg(feature = "underline-color")]
+                {
+                    underline_color = Color::Reset;
+                }
+            }
             let wrapped = row_wrapped.get(row).copied().unwrap_or(false);
             if line_width < width && !wrapped {
                 queue!(
@@ -807,6 +817,24 @@ mod tests {
         assert!(
             !output.contains("defgh\x1b[K\r\n"),
             "do not emit EL after writing through the last column"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "native-scrolling")]
+    fn stream_lines_to_scrollback_resets_style_before_erasing_and_scrolling() {
+        let mut backend = CrosstermBackend::new(Vec::new());
+        let mut styled = cell("x");
+        styled.bg = Color::Green;
+
+        backend
+            .stream_lines_to_scrollback(&[styled, empty_cell()], 2, 1, 2, &[false])
+            .unwrap();
+
+        let output = String::from_utf8(backend.writer).unwrap();
+        assert!(
+            output.contains("x\x1b[0m\x1b[K\r\n"),
+            "style must be reset before erased or newly scrolled cells are created: {output:?}"
         );
     }
 
